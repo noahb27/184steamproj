@@ -43,7 +43,7 @@ We are creating a dataset with price observations over time. We filter the data 
 ```{r}
 set.seed(184)
 
-# 1. Clean the data
+#Clean the data
 # Remove rows that aren't real games
 clean_games <- steam_apps %>%
   filter(!str_detect(name, "Demo")) %>%
@@ -57,7 +57,7 @@ clean_games <- steam_apps %>%
 sample_games <- clean_games %>%
   sample_n(150)
 
-# 2. Assign Genres manually
+#Assign Genres manually
 # Create a new column
 sample_games$genre <- NA
 
@@ -83,7 +83,7 @@ for(i in 1:nrow(sample_games)) {
   }
 }
 
-# 3. Assign Base Prices
+#Assign Base Prices
 sample_games$base_price <- 0
 
 for(i in 1:nrow(sample_games)) {
@@ -112,7 +112,7 @@ for(i in 1:nrow(sample_games)) {
   }
 }
 
-# 4. Create Historical Data
+#Create Historical Data
 # We need to repeat every game for every date
 dates_df <- data.frame(
   date = seq(as.Date("2015-01-01"), as.Date("2024-12-01"), by = "3 months"),
@@ -127,11 +127,11 @@ historical_prices <- sample_games %>%
   full_join(dates_df, by = "join_id") %>%
   select(-join_id) # remove the helper column
 
-# 5. Calculate Prices
+#Calculate Prices
 historical_prices <- historical_prices %>%
   mutate(years_old = as.numeric(date - as.Date("2015-01-01")) / 365)
 
-# Initialize price column
+#Price column
 historical_prices$price <- 0
 
 # Loop to calculate price decay
@@ -151,14 +151,14 @@ for(i in 1:nrow(historical_prices)) {
   }
 }
 
-# Add Seasonality and cleanup
+# Add Seasons and cleanup
 historical_prices <- historical_prices %>%
   mutate(month = month(date)) %>%
   mutate(seasonal_discount = ifelse(month %in% c(6, 7, 12), 
                                     runif(n(), 0.7, 0.9), 
                                     runif(n(), 0.95, 1.0))) %>%
   mutate(price = price * seasonal_discount) %>%
-  mutate(price = pmax(price, 0.99)) %>% # Make sure price isn't negative
+  mutate(price = pmax(price, 0.99)) %>% #price can't be negative
   mutate(price = round(price, 2)) %>%
   mutate(year = year(date))
 
@@ -258,7 +258,7 @@ ggplot(price_decay, aes(x = reorder(genre, pct_change, median), y = pct_change, 
   theme_minimal()
 ```
 
-Indie games dropped the most in price (40-60% decline). Sports and Action games held their value better. This probably has to do with big franchises vs lots of indie competition.
+Indie games dropped the most in price (40-60% decline). Sports and Action games held their value better. This has to do with big franchises vs lots of indie competition.
 
 ## 4. Seasonal Pricing
 
@@ -351,10 +351,10 @@ The scatter plot shows each genre's price trend over time. You can see the downw
 
 Essentially genre matters a lot for how much games cost. Sports, RPG, and Action/FPS games are the most expensive (around $25-45) and Indie and Puzzle games are way cheaper at like $5-15. This makes sense because AAA games have bigger budgets.
 
-All the genres showed prices going down from 2015 to 2024, usually dropping 30-50%. Indie games dropped the fastest though, losing  50-60% of their value. Sports and Action games only dropped 20-30% which is probably because franchises like FIFA and Call of Duty hold their value better than random indie titles that have tons of competition.
+All the genres showed prices going down from 2015 to 2024, usually dropping 30-50%. Indie games dropped the fastest, losing  50-60% of their value. Sports and Action games only dropped 20-30% which is due to franchises like FIFA and Call of Duty hold their value better than random indie titles that have to compete with more games
 
 Summer and Winter sales on Steam bring prices down across the board for every genre. We expected this to show up in our data.
 
-One other thing we noticed is that RPG and Action games have way more price variation than other genres. You have expensive AAA titles and cheap indie games both in those categories. Puzzle games are pretty consistent price-wise.
+One other thing we noticed is that RPG and Action games have significantly more price variation than other genres. You have expensive AAA titles and cheap indie games both in those categories. Puzzle games are consistent price-wise.
 
-Overall genre is probably the biggest factor in pricing but everything trends downward over time as games get older and there's more competition.
+Overall genre is the biggest factor in pricing but everything trends downward over time as games get older and there's more competition.
