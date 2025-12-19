@@ -1,0 +1,451 @@
+---
+title: "Steam Game Price and Genre Analysis"
+author: "Sam and Noah - STAT 184"
+date: "12/6/2025"
+format:
+  pdf:
+    toc: true
+    number-sections: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+# What we're exploring
+
+We're analyzing Steam game data to understand how price, genre, tags, and player engagement relate to each other. We have multiple datasets that we'll join together to get a complete picture of the Steam game market.
+
+```{r}
+library(tidyverse)
+library(scales)
+```
+
+## Load and Join Datasets
+
+We have several datasets:
+
+- **games.csv**: Basic game info with names, release dates, and prices
+- **genres.csv**: Game genres (one game can have multiple genres)
+- **tags.csv**: User-defined tags for games
+- **categories.csv**: Game categories (multiplayer, single-player, etc.)
+- **steamspy_insights.csv**: Player statistics and additional info
+
+```{r}
+# Load all our datasets
+games <- read_csv("Data/games.csv")
+genres <- read_csv("Data/genres.csv")
+tags <- read_csv("Data/tags.csv")
+categories <- read_csv("Data/categories.csv")
+steamspy <- read_csv("Data/steamspy_insights.csv")
+
+cat("Games dataset:", nrow(games), "rows\n")
+cat("Genres dataset:", nrow(genres), "rows\n")
+cat("Tags dataset:", nrow(tags), "rows\n")
+cat("Steamspy dataset:", nrow(steamspy), "rows\n")
+```
+
+## Clean and Join the Data
+
+```{r}
+# Filter games to only include actual games
+games_only <- games %>%
+  filter(type == "game") %>%
+  filter(!is.na(name))
+
+cat("Number of actual games:", nrow(games_only), "\n")
+
+# Standardize genre names (some are in different languages)
+genres_clean <- genres %>%
+  mutate(genre = case_when(
+    genre %in% c("Экшены", "Akcja", "Aktion") ~ "Action",
+    genre %in% c("Бесплатные", "Free to Play", "Free To Play") ~ "Free to Play",
+    genre %in% c("Стратегии", "Estrategia") ~ "Strategy",
+    genre %in% c("Ролевые игры", "RPG") ~ "RPG",
+    genre %in% c("Приключения", "Aventura") ~ "Adventure",
+    genre %in% c("Казуальные игры", "Casual") ~ "Casual",
+    genre %in% c("Симуляторы", "Simulation") ~ "Simulation",
+    genre %in% c("Инди", "Indie") ~ "Indie",
+    genre %in% c("Гонки", "Racing") ~ "Racing",
+    genre %in% c("Спорт", "Sports") ~ "Sports",
+    TRUE ~ genre
+  ))
+
+# Get  genre for each game 
+primary_genres <- genres_clean %>%
+  group_by(app_id) %>%
+  summarize(primary_genre = first(genre))
+
+games_with_genre <- games_only %>%
+  left_join(primary_genres, by = "app_id")
+
+cat("Games with genre info:", sum(!is.na(games_with_genre$primary_genre)), "\n")
+```
+
+```{r}
+#join with steamspy data to get price and player info it has clean price data in cents
+games_full <- games_with_genre %>%
+  left_join(steamspy, by = "app_id") %>%
+  filter(!is.na(price)) %>%
+  filter(!is.na(primary_genre))
+
+# Convert price and discount to numeric then to dollars
+games_full <- games_full %>%
+  mutate(price = as.numeric(price),
+         initial_price = as.numeric(initial_price),
+         discount = as.numeric(discount)) %>%
+  filter(!is.na(price)) %>%
+  mutate(price_dollars = price / 100,
+         initial_price_dollars = initial_price / 100)
+
+cat("Final dataset with all info:", nrow(games_full), "games\n")
+```
+
+## Summary of Our Joined Data
+
+```{r}
+# Count games per genre
+genre_summary <- games_full %>%
+  group_by(primary_genre) %>%
+  summarize(
+    game_count = n(),
+    avg_price = mean(price_dollars, na.rm = TRUE),
+    median_price = median(price_dollars, na.rm = TRUE)
+  ) %>%
+  arrange(desc(game_count))
+
+knitr::kable(genre_summary, 
+             col.names = c("Genre", "Number of Games", "Avg Price", "Median Price"),
+             digits = 2)
+```
+
+# Visualizations and Analysis
+
+## Price Distribution by Genre
+
+```{r}
+# Filter to top genres with enough games
+top_genres <- genre_summary %>%
+  filter(game_count >= 100) %>%
+  pull(primary_genre)
+
+price_data <- games_full %>%
+  filter(primary_genre %in% top_genres) %>%
+  filter(price_dollars > 0) %>%  # no free games for this chart
+  filter(price_dollars < 100)    
+
+ggplot(price_data, aes(x = reorder(primary_genre, price_dollars, median), 
+                       y = price_dollars, 
+                       fill = primary_genre)) +
+  geom_boxplot(alpha = 0.7, show.legend = FALSE) +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set3") +
+  scale_y_continuous(labels = dollar_format()) +
+  labs(
+    title = "Price Distribution by Genre (Paid Games Only)",
+    subtitle = "Genres with 100+ games shown",
+    x = "Genre",
+    y = "Price"
+  ) +
+  theme_minimal()
+```
+
+RPG and Simulation games tend to be the most expensive, while Casual and Indie games are typically cheaper. This makes sense because bigger RPG games usually have more content and take longer to make.
+
+## Free vs Paid Games by Genre
+
+```{r}
+# Calculate free vs paid ratio per genre
+free_paid <- games_full %>%
+  filter(primary_genre %in% top_genres) %>%
+  mutate(is_free = ifelse(price_dollars == 0, "Free", "Paid")) %>%
+  group_by(primary_genre, is_free) %>%
+  summarize(count = n()) %>%
+  group_by(primary_genre) %>%
+  mutate(pct = count / sum(count) * 100)
+
+ggplot(free_paid, aes(x = reorder(primary_genre, -pct), y = pct, fill = is_free)) +
+  geom_col(position = "stack", alpha = 0.8) +
+  scale_fill_manual(values = c("Free" = "#2ecc71", "Paid" = "#3498db")) +
+  labs(
+    title = "Free vs Paid Games by Genre",
+    x = "Genre",
+    y = "Percentage",
+    fill = ""
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Action and Casual genres have the highest proportion of free games. Simulation and RPG games are almost always paid.
+
+## Player Ownership Analysis
+
+```{r}
+# Parse the ownership range to get a numeric estimate
+# We'll use the lower bound for conservative estimates
+games_full <- games_full %>%
+  mutate(owners_lower = as.numeric(str_extract(owners_range, "^[\\d,]+")))
+
+games_full <- games_full %>%
+  mutate(owners_clean = str_replace_all(owners_range, ",", "")) %>%
+  mutate(owners_lower = as.numeric(str_extract(owners_clean, "^\\d+")))
+
+ownership_by_genre <- games_full %>%
+  filter(primary_genre %in% top_genres) %>%
+  filter(!is.na(owners_lower)) %>%
+  group_by(primary_genre) %>%
+  summarize(
+    avg_owners = mean(owners_lower, na.rm = TRUE),
+    total_games = n()
+  )
+
+ggplot(ownership_by_genre, aes(x = reorder(primary_genre, avg_owners), 
+                                y = avg_owners / 1000000)) +
+  geom_col(fill = "#9b59b6", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Average Player Ownership by Genre",
+    x = "Genre",
+    y = "Average Owners (Millions)"
+  ) +
+  theme_minimal()
+```
+
+Action and Free to Play games have the highest average ownership. This makes sense since free games have no barrier to entry.
+
+## Popular Tags Analysis
+
+```{r}
+# Count tag frequency
+tag_counts <- tags %>%
+  group_by(tag) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count)) %>%
+  head(20)
+
+ggplot(tag_counts, aes(x = reorder(tag, count), y = count)) +
+  geom_col(fill = "#e74c3c", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Top 20 Most Common Tags on Steam",
+    x = "Tag",
+    y = "Number of Games"
+  ) +
+  theme_minimal()
+```
+
+Indie and Singleplayer are the most common tags. This shows that most Steam games are independent productions designed for solo play.
+
+## Price vs Player Count Relationship
+
+```{r}
+# Sample for plotting (too many points otherwise)
+set.seed(184)
+sample_for_plot <- games_full %>%
+  filter(primary_genre %in% top_genres) %>%
+  filter(price_dollars > 0 & price_dollars < 80) %>%
+  filter(!is.na(owners_lower)) %>%
+  sample_n(min(2000, n()))
+
+ggplot(sample_for_plot, aes(x = price_dollars, y = log10(owners_lower + 1), 
+                            color = primary_genre)) +
+  geom_point(alpha = 0.5, size = 2) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.8) +
+  scale_color_brewer(palette = "Set2") +
+  labs(
+    title = "Price vs Player Ownership",
+    subtitle = "Log scale for ownership",
+    x = "Price ($)",
+    y = "Owners (log10 scale)",
+    color = "Genre"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+There's a slight negative relationship between price and ownership for most genres. Cheaper games tend to have more players, which makes sense.
+
+## Top Publishers by Game Count
+
+```{r}
+# Count games by publisher
+publisher_counts <- games_full %>%
+  filter(!is.na(publisher)) %>%
+  group_by(publisher) %>%
+  summarize(
+    game_count = n(),
+    avg_price = mean(price_dollars, na.rm = TRUE)
+  ) %>%
+  arrange(desc(game_count)) %>%
+  head(15)
+
+ggplot(publisher_counts, aes(x = reorder(publisher, game_count), y = game_count)) +
+  geom_col(fill = "#1abc9c", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Top 15 Publishers by Number of Games",
+    x = "Publisher",
+    y = "Number of Games"
+  ) +
+  theme_minimal()
+```
+
+## Discount Analysis
+
+
+```{r}
+# Filter to games that have been discounted at some point
+discounted_games <- games_full %>%
+  filter(primary_genre %in% top_genres) %>%
+  filter(discount > 0)
+
+discount_by_genre <- discounted_games %>%
+  group_by(primary_genre) %>%
+  summarize(
+    avg_discount = mean(discount, na.rm = TRUE),
+    games_on_sale = n()
+  )
+
+ggplot(discount_by_genre, aes(x = reorder(primary_genre, avg_discount), 
+                               y = avg_discount)) +
+  geom_col(fill = "#f39c12", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Average Discount by Genre (For Discounted Games)",
+    x = "Genre",
+    y = "Average Discount (%)"
+  ) +
+  theme_minimal()
+```
+
+## Multiplayer vs Single-Player Price Comparison
+
+```{r}
+# Find games with multiplayer or single-player categories
+multiplayer_games <- categories %>%
+  filter(str_detect(category, "Multi-player|Co-op")) %>%
+  pull(app_id) %>%
+  unique()
+
+singleplayer_games <- categories %>%
+  filter(category == "Single-player") %>%
+  pull(app_id) %>%
+  unique()
+
+# Add category to games
+games_full <- games_full %>%
+  mutate(play_type = case_when(
+    app_id %in% multiplayer_games & app_id %in% singleplayer_games ~ "Both",
+    app_id %in% multiplayer_games ~ "Multiplayer Only",
+    app_id %in% singleplayer_games ~ "Single-player Only",
+    TRUE ~ "Unknown"
+  ))
+
+play_type_prices <- games_full %>%
+  filter(play_type != "Unknown") %>%
+  filter(price_dollars > 0 & price_dollars < 80)
+
+ggplot(play_type_prices, aes(x = play_type, y = price_dollars, fill = play_type)) +
+  geom_boxplot(alpha = 0.7, show.legend = FALSE) +
+  scale_fill_brewer(palette = "Pastel1") +
+  scale_y_continuous(labels = dollar_format()) +
+  labs(
+    title = "Price Distribution: Single-player vs Multiplayer",
+    x = "Game Type",
+    y = "Price"
+  ) +
+  theme_minimal()
+```
+
+Games that offer both single-player and multiplayer tend to be priced higher, probably because they offer more content and features.
+
+## Genre Combinations
+
+```{r}
+# Get all genres for each game
+all_genres_per_game <- genres_clean %>%
+  group_by(app_id) %>%
+  summarize(all_genres = paste(genre, collapse = " + ")) %>%
+  filter(str_detect(all_genres, "\\+"))  #games with multiple genres
+
+# count
+genre_combos <- all_genres_per_game %>%
+  group_by(all_genres) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count)) %>%
+  head(10)
+
+ggplot(genre_combos, aes(x = reorder(all_genres, count), y = count)) +
+  geom_col(fill = "#8e44ad", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Top 10 Genre Combinations",
+    x = "Genre Combination",
+    y = "Number of Games"
+  ) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8))
+```
+
+Action + Adventure and Action + Indie are the most common genre combinations.
+
+## Price Trends by Release Year
+
+```{r}
+games_full <- games_full %>%
+  mutate(release_year = year(as.Date(release_date)))
+
+# Filter
+yearly_prices <- games_full %>%
+  filter(release_year >= 2010 & release_year <= 2024) %>%
+  filter(price_dollars > 0 & price_dollars < 100) %>%
+  group_by(release_year, primary_genre) %>%
+  summarize(avg_price = mean(price_dollars, na.rm = TRUE)) %>%
+  filter(primary_genre %in% c("Action", "RPG", "Indie", "Strategy", "Adventure"))
+
+ggplot(yearly_prices, aes(x = release_year, y = avg_price, color = primary_genre)) +
+  geom_line(size = 1.2, alpha = 0.8) +
+  geom_point(size = 2) +
+  scale_color_brewer(palette = "Set1") +
+  scale_y_continuous(labels = dollar_format()) +
+  labs(
+    title = "Average Price by Release Year",
+    x = "Release Year",
+    y = "Average Price",
+    color = "Genre"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+Interesting trends: RPG games have gotten more expensive over time, while Indie games have remained consistently cheap. Action games show some price volatility.
+
+# Key Insights
+
+Based on our analysis of real Steam data:
+
+**Price patterns:**
+
+- RPG and Simulation games are the most expensive genres, with median prices around $15-20
+- Indie and Casual games are the cheapest, usually under $10
+- Games that offer both single-player and multiplayer tend to cost more
+
+**Player ownership:**
+
+- Free to Play and Action games have the highest average ownership
+- There's a negative relationship between price and ownership. cheaper games get more players
+- This is especially true for Action and Indie genres
+
+**Market composition:**
+
+- Indie is the most common tag on Steam, showing the platform is dominated by independent developers
+- Action + Adventure and Action + Indie are the most common genre combinations
+- Big publishers like SEGA and Ubisoft have large catalogs, but the market is very fragmented
+
+**Trends over time:**
+
+- RPG games have gotten more expensive in recent years
+- Indie game prices have stayed stable and low
+- The Steam market has grown significantly, with more games releasing each year
